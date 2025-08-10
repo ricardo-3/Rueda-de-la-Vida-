@@ -1,0 +1,464 @@
+<!--
+  A standalone static implementation of the “Rueda de la Vida” (Wheel of Life)
+  exercise.  This page re‑creates the interactive experience originally built
+  with Next.js and ShadCN UI but without any build step.  You can drop this
+  file into a GitHub Pages site and it will work out of the box.
+
+  To run locally just open this file in a browser.  All styles are supplied
+  through the TailwindCSS CDN and the radar chart is rendered using
+  Chart.js.  The interactive wheel is drawn on a canvas element and
+  responds to clicks to update each life area’s level.
+-->
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rueda de la Vida</title>
+    <!-- Tailwind CSS via CDN for utility classes -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js for the radar chart -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Custom theme configuration for Tailwind (optional).  This adds a
+         light blue palette similar to the original app. -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: {
+                50: '#F0F8FF',
+                100: '#D9EEFF',
+                200: '#B3DCFF',
+                300: '#8DCBFF',
+                400: '#66B9FF',
+                500: '#40A7FF',
+                600: '#2B86DB',
+                700: '#1F64A7',
+                800: '#144273',
+                900: '#091F40'
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      /* Custom CSS for subtle glass‑like panels and blur effects */
+      .glass {
+        backdrop-filter: blur(8px);
+        background-color: rgba(255, 255, 255, 0.8);
+      }
+      /* Ensure the canvas respects width constraints on smaller screens */
+      #wheelCanvas {
+        max-width: 90vw;
+        height: auto;
+      }
+    </style>
+  </head>
+  <body class="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/30 to-indigo-50/20 text-slate-800">
+    <main class="max-w-5xl mx-auto px-4 py-8 space-y-12">
+      <!-- Header -->
+      <header class="text-center space-y-4">
+        <h1 class="text-5xl font-bold tracking-tight bg-gradient-to-r from-blue-400 to-blue-200 bg-clip-text text-transparent">
+          Rueda de la Vida
+        </h1>
+        <p class="text-lg text-slate-600 max-w-3xl mx-auto font-light">
+          Toca cada segmento para reflejar tu nivel de satisfacción. Respira,
+          reflexiona y evalúa con calma.
+        </p>
+      </header>
+
+      <!-- Interactive wheel container -->
+      <section class="flex justify-center">
+        <div class="relative">
+          <!-- Outer glow -->
+          <div class="absolute inset-0 rounded-full bg-gradient-to-br from-white/40 to-white/20 blur-2xl scale-[0.9] sm:scale-100 md:scale-105"></div>
+          <!-- Canvas for drawing the wheel -->
+          <canvas
+            id="wheelCanvas"
+            width="800"
+            height="800"
+            class="relative z-10 rounded-full shadow-xl shadow-blue-100/50 bg-white/80 cursor-pointer"
+          ></canvas>
+          <!-- Labels overlay -->
+          <div id="labelsContainer" class="absolute inset-0 pointer-events-none"></div>
+        </div>
+      </section>
+
+      <!-- Buttons -->
+      <div class="flex justify-center gap-6 pt-4">
+        <button
+          id="evaluateButton"
+          class="px-8 py-3 rounded-full bg-white/90 text-primary-600 border border-white/80 shadow-lg backdrop-blur-md hover:bg-white transition-all"
+        >
+          Evaluar
+        </button>
+        <button
+          id="resetButton"
+          class="px-8 py-3 rounded-full bg-white/80 text-slate-700 border border-white/70 shadow-lg backdrop-blur-md hover:bg-white/90 transition-all"
+        >
+          Volver a empezar
+        </button>
+      </div>
+
+      <!-- Results container; hidden until the user evaluates -->
+      <section id="resultsSection" class="space-y-12 hidden">
+        <!-- Radar chart card -->
+        <div class="glass rounded-3xl p-8 shadow-xl border border-white/60">
+          <h3 class="text-2xl text-center mb-6 font-light">Tu Equilibrio Interior</h3>
+          <div class="h-80">
+            <canvas id="radarChartCanvas" height="320"></canvas>
+          </div>
+        </div>
+        <!-- Summary table card -->
+        <div class="glass rounded-3xl p-8 shadow-xl border border-white/60">
+          <h3 class="text-2xl text-center mb-6 font-light">Reflexión por Área</h3>
+          <div class="overflow-x-auto bg-white/40 rounded-2xl p-4">
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-300/50">
+                  <th class="px-4 py-2 text-left font-medium text-slate-700">Área</th>
+                  <th class="px-4 py-2 text-left font-medium text-slate-700">Nivel</th>
+                  <th class="px-4 py-2 text-left font-medium text-slate-700">Reflexión</th>
+                </tr>
+              </thead>
+              <tbody id="summaryTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <!-- Suggestions card -->
+        <div class="glass rounded-3xl p-8 shadow-xl border border-white/60">
+          <h3 class="text-2xl text-center mb-6 font-light">Caminos de Crecimiento</h3>
+          <div class="bg-white/40 rounded-2xl p-6">
+            <ul id="suggestionsList" class="space-y-4 text-slate-700"></ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      // Define the life segments and their colours.  These mirror the original
+      // values used in the Next.js version of the project.
+      const segments = [
+        'Salud',
+        'Familia',
+        'Amigos',
+        'Finanzas',
+        'Trabajo',
+        'Ocio',
+        'Crecimiento',
+        'Espiritualidad'
+      ];
+      // Use a soothing pastel colour palette suitable for a yoga/zen app.
+      const segmentColours = [
+        '#B3E5FC', // light blue
+        '#C8E6C9', // light green
+        '#F8BBD0', // soft pink
+        '#FFE0B2', // light peach
+        '#FFECB3', // pale yellow
+        '#D1C4E9', // lavender
+        '#B2DFDB', // aqua
+        '#F0F4C3'  // very light lime
+      ];
+
+      // Each segment starts with a default level of 1 (range 1–10).
+      let values = new Array(segments.length).fill(1);
+      let selectedSegment = null;
+      const canvas = document.getElementById('wheelCanvas');
+      const ctx = canvas.getContext('2d');
+      const labelsContainer = document.getElementById('labelsContainer');
+      const resultsSection = document.getElementById('resultsSection');
+      const summaryTableBody = document.getElementById('summaryTableBody');
+      const suggestionsList = document.getElementById('suggestionsList');
+
+      // Draw the wheel on the canvas
+      function drawWheel() {
+        if (!ctx) return;
+        const width = canvas.width;
+        const height = canvas.height;
+        const centerX = width / 2;
+        const centerY = height / 2;
+        // Keep the wheel within the canvas boundaries.  Use a relative
+        // percentage instead of a fixed subtraction to preserve proportions
+        // across different screen sizes.
+        const radius = Math.min(centerX, centerY) * 0.8;
+        const angleStep = (2 * Math.PI) / segments.length;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+
+        // Draw reference rings
+        ctx.strokeStyle = '#e0e0e0';
+        ctx.lineWidth = 1;
+        for (let i = 1; i <= 10; i++) {
+          ctx.beginPath();
+          ctx.arc(centerX, centerY, (radius * i) / 10, 0, 2 * Math.PI);
+          ctx.stroke();
+        }
+
+        // Draw numerical labels (1–10) along the top radius.  These labels
+        // help users understand the scale when selecting a value.
+        ctx.fillStyle = '#334155'; // dark blue‑gray for improved legibility
+        ctx.font = '14px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        for (let i = 1; i <= 10; i++) {
+          const yPos = centerY - (radius * i) / 10;
+          // Draw the number slightly to the right of the centre line
+          ctx.fillText(i.toString(), centerX + 5, yPos);
+        }
+
+        // Draw each segment
+        segments.forEach((segment, index) => {
+          const startAngle = index * angleStep - Math.PI / 2;
+          const endAngle = (index + 1) * angleStep - Math.PI / 2;
+          const value = values[index];
+          const segmentRadius = (radius * value) / 10;
+
+          // Fill the segment area based on its value
+          ctx.fillStyle = segmentColours[index];
+          ctx.beginPath();
+          ctx.moveTo(centerX, centerY);
+          ctx.arc(centerX, centerY, segmentRadius, startAngle, endAngle);
+          ctx.closePath();
+          ctx.fill();
+
+          // Outline the full segment
+          ctx.strokeStyle = '#2c3e50';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(centerX, centerY);
+          ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+          ctx.closePath();
+          ctx.stroke();
+
+          // Highlight the selected segment
+          if (selectedSegment === index) {
+            // Use a soft pastel blue for the selected segment border.  This
+            // subtle colour provides feedback without overwhelming the
+            // overall palette.
+            ctx.strokeStyle = '#6cb2eb';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(centerX, centerY);
+            ctx.arc(centerX, centerY, radius, startAngle, endAngle);
+            ctx.closePath();
+            ctx.stroke();
+          }
+        });
+
+        // Draw labels around the wheel.  Labels have a fixed distance from
+        // the centre to avoid proportion issues on mobile devices.  Each
+        // label includes a coloured dot referencing its segment colour and
+        // uses consistent font sizes (not exceeding 16 px) for clarity.
+        labelsContainer.innerHTML = '';
+        segments.forEach((segment, index) => {
+          // Position label using polar coordinates
+          const angleDegrees = index * (360 / segments.length) - 90;
+          const angleRadians = (angleDegrees * Math.PI) / 180;
+          // Fixed distance from centre (percentage of container width)
+          const radiusPercent = 42;
+          const xPercent = 50 + radiusPercent * Math.cos(angleRadians);
+          const yPercent = 50 + radiusPercent * Math.sin(angleRadians);
+          const label = document.createElement('div');
+          // Elevate label above canvas and glow
+          label.className = 'absolute transform -translate-x-1/2 -translate-y-1/2 z-20';
+          label.style.left = `${xPercent}%`;
+          label.style.top = `${yPercent}%`;
+          // Determine the segment’s colour for the indicator dot
+          const colourDot = segmentColours[index];
+          label.innerHTML = `
+            <div class="bg-white rounded-lg shadow-lg border border-white/60 ring-1 ring-blue-100/30 px-2 py-1">
+              <span class="text-sm font-medium text-black whitespace-nowrap">
+                ${segment}
+                <span class="inline-block w-2 h-2 ml-1 rounded-full" style="background-color:${colourDot}"></span>
+              </span>
+              <div class="text-xs text-center text-gray-700 mt-1">${values[index]}/10</div>
+            </div>
+          `;
+          labelsContainer.appendChild(label);
+        });
+      }
+
+      // Handle clicks on the canvas to update segment values
+      canvas.addEventListener('click', (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        // Match the radius used in drawWheel (80% of half‑width) so that
+        // click detection stays consistent with the drawn wheel on all
+        // viewport sizes.
+        const maxRadius = Math.min(centerX, centerY) * 0.8;
+        const dx = x - centerX;
+        const dy = y - centerY;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance > maxRadius) return; // ignore clicks outside the wheel
+        // Determine the segment by angle
+        let angle = Math.atan2(dy, dx) + Math.PI / 2;
+        if (angle < 0) angle += 2 * Math.PI;
+        const segmentIndex = Math.floor(angle / ((2 * Math.PI) / segments.length));
+        // Level is proportional to the distance (1–10)
+        const level = Math.ceil((distance / maxRadius) * 10);
+        selectedSegment = segmentIndex;
+        values[segmentIndex] = Math.max(1, Math.min(10, level));
+        drawWheel();
+      });
+
+      // Generate the evaluation results: populate the radar chart, table and suggestions
+      function generateResults() {
+        // Show the results section
+        resultsSection.classList.remove('hidden');
+        // Create radar chart data
+        const radarData = {
+          labels: segments,
+          datasets: [
+            {
+              label: 'Nivel',
+              data: values,
+              // Match the pastel highlight colour used on the wheel
+              backgroundColor: 'rgba(108, 178, 235, 0.2)',
+              borderColor: '#6cb2eb',
+              borderWidth: 2,
+              pointBackgroundColor: '#6cb2eb'
+            }
+          ]
+        };
+        // Destroy existing chart if present to avoid duplicates
+        if (window.radarChartInstance) {
+          window.radarChartInstance.destroy();
+        }
+        const radarCtx = document.getElementById('radarChartCanvas').getContext('2d');
+        window.radarChartInstance = new Chart(radarCtx, {
+          type: 'radar',
+          data: radarData,
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              r: {
+                min: 0,
+                max: 10,
+                ticks: {
+                  stepSize: 2,
+                  color: '#64748b'
+                },
+                grid: {
+                  color: '#e2e8f0'
+                },
+                pointLabels: {
+                  color: '#334155',
+                  font: {
+                    size: 12,
+                    weight: '500'
+                  }
+                }
+              }
+            },
+            plugins: {
+              legend: {
+                display: false
+              },
+              tooltip: {
+                callbacks: {
+                  label: function (context) {
+                    return `${context.label}: ${context.parsed.r}`;
+                  }
+                }
+              }
+            }
+          }
+        });
+        // Populate summary table
+        summaryTableBody.innerHTML = '';
+        segments.forEach((segment, index) => {
+          const tr = document.createElement('tr');
+          tr.className = 'border-b border-slate-300/30';
+          const reflection = getReflection(values[index]);
+          tr.innerHTML = `
+            <td class="px-4 py-2 font-medium text-slate-800">${segment}</td>
+            <td class="px-4 py-2 font-medium text-slate-700">${values[index]}/10</td>
+            <td class="px-4 py-2 text-slate-700">${reflection}</td>
+          `;
+          summaryTableBody.appendChild(tr);
+        });
+        // Generate suggestions
+        const suggestions = getSuggestions();
+        suggestionsList.innerHTML = '';
+        suggestions.forEach((suggestion) => {
+          const li = document.createElement('li');
+          li.className = 'flex items-start';
+          // Determine the colour of the bullet based on the area name at the
+          // beginning of the suggestion.  If no match is found default to
+          // the highlight colour.
+          const areaName = suggestion.split(':')[0];
+          const colourIdx = segments.indexOf(areaName);
+          const dotColour = colourIdx >= 0 ? segmentColours[colourIdx] : '#6cb2eb';
+          li.innerHTML = `
+            <span class="inline-block w-3 h-3 mt-1 mr-3 rounded-full" style="background-color:${dotColour}"></span>
+            <span class="leading-relaxed">${suggestion}</span>
+          `;
+          suggestionsList.appendChild(li);
+        });
+      }
+
+      // Determine reflection text based on a value
+      function getReflection(value) {
+        if (value <= 5) return 'Necesita atención';
+        if (value <= 7) return 'Moderado';
+        return 'Buen equilibrio';
+      }
+      // Determine suggestions based on low scoring areas
+      function getSuggestions() {
+        const areasAtention = segments
+          .map((segment, index) => ({ segment, value: values[index] }))
+          .filter((item) => item.value <= 5);
+        if (areasAtention.length === 0) {
+          return ['¡Felicidades! Todas las áreas están en buen equilibrio.'];
+        }
+        const tips = {
+          Salud: 'Considera incorporar ejercicio regular y una alimentación balanceada',
+          Familia: 'Dedica más tiempo de calidad con tus seres queridos',
+          Amigos: 'Fortalece tus relaciones sociales y cultiva nuevas amistades',
+          Finanzas: 'Revisa tu presupuesto y considera opciones de ahorro e inversión',
+          Trabajo: 'Evalúa tu satisfacción laboral y oportunidades de crecimiento',
+          Ocio: 'Incluye más actividades recreativas y hobbies en tu rutina',
+          Crecimiento: 'Invierte en tu desarrollo personal y profesional',
+          Espiritualidad: 'Dedica tiempo a la reflexión y prácticas que nutran tu espíritu'
+        };
+        return areasAtention.map((area) => `${area.segment}: ${tips[area.segment]}`);
+      }
+
+      // Set up button handlers
+      document.getElementById('evaluateButton').addEventListener('click', generateResults);
+      document.getElementById('resetButton').addEventListener('click', () => {
+        values = new Array(segments.length).fill(1);
+        selectedSegment = null;
+        // Redraw using resizeCanvas to ensure the wheel adapts to the current viewport
+        resizeCanvas();
+        resultsSection.classList.add('hidden');
+      });
+
+      // Draw initial state
+      // Resize the canvas to fit its container before drawing.  On smaller
+      // screens this ensures the wheel scales down gracefully.
+      function resizeCanvas() {
+        // Determine the available width of the canvas parent (the wrapper div)
+        const parent = canvas.parentElement;
+        if (!parent) return;
+        // Use the smaller of the container width or viewport height to keep
+        // the wheel from overflowing vertically
+        const maxSize = Math.min(parent.offsetWidth, window.innerHeight * 0.6);
+        canvas.width = maxSize;
+        canvas.height = maxSize;
+        drawWheel();
+      }
+      // Redraw whenever the window size changes
+      window.addEventListener('resize', resizeCanvas);
+      // Initial draw
+      resizeCanvas();
+    </script>
+  </body>
+</html>
